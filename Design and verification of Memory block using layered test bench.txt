@@ -1,0 +1,175 @@
+Memory RTL 
+
+module memory (addr, cs, re, we, clk, reset, data_in, data_out);
+parameter addr_width=8;
+parameter data_width=8;
+
+input [addr_width-1:0] addr;
+input cs, re, we;
+input clk, reset;
+input [data_width-1:0] data_in;
+output reg [data_width-1:0] data_out;
+
+reg [data_width-1:0] mem [0:(2**addr_width)-1];
+
+integer i;
+
+always @(posedge clk) begin
+  if (reset) begin
+    for (i=0; i<2**addr_width; i=i+1)
+      mem[i] <= 0;
+    data_out <= 0;
+  end else if (cs) begin
+    if (we)
+      mem[addr] <= data_in;
+    else if (re)
+      data_out <= mem[addr];
+  end
+end
+
+endmodule
+
+Generator
+
+class mem_trans_gen #(addr_width=`awidth, data_width=`dwidth);
+
+transaction mem_trans, mem_trans_mb;
+mailbox gen2mbox;
+
+function new(mailbox inbox);
+  this.gen2mbox = inbox;
+endfunction
+
+task run(string test_name);
+begin
+  if (test_name == "single_wr_rd") begin
+    repeat (`no_of_trans) begin
+      mem_trans = new();
+      assert(mem_trans.randomize() with {trans_type==WRITE;});
+      gen2mbox.put(mem_trans);
+
+      mem_trans_mb = new();
+      assert(mem_trans_mb.randomize() with {addr==mem_trans.addr; trans_type==READ;});
+      gen2mbox.put(mem_trans_mb);
+    end
+  end
+end
+endtask
+
+endclass
+
+
+Driver
+
+class mem_trans_drv #(addr_width=`awidth, data_width=`dwidth);
+
+transaction mem_trans_mb;
+mailbox mbox2drv;
+virtual mem_if mem_if_drv;
+
+function new(mailbox inbox, virtual mem_if v_if);
+  this.mbox2drv = inbox;
+  this.mem_if_drv = v_if;
+endfunction
+
+task run();
+begin
+  @(negedge mem_if_drv.reset);
+  repeat (`no_of_trans) begin
+    mbox2drv.get(mem_trans_mb);
+    send_to_dut(mem_trans_mb);
+
+    mbox2drv.get(mem_trans_mb);
+    send_to_dut(mem_trans_mb);
+  end
+end
+endtask
+
+task send_to_dut(input transaction trans_drv);
+begin
+  @(posedge mem_if_drv.clk)
+
+  if (trans_drv.trans_type==WRITE) begin
+    mem_if_drv.mem_drv.cs = 1;
+    mem_if_drv.mem_drv.we = 1;
+    mem_if_drv.mem_drv.re = 0;
+    mem_if_drv.mem_drv.addr = trans_drv.addr;
+    mem_if_drv.mem_drv.data_in = trans_drv.wr_data;
+
+    @(posedge mem_if_drv.clk)
+    mem_if_drv.mem_drv.cs = 0;
+    mem_if_drv.mem_drv.we = 0;
+  end
+
+  if (trans_drv.trans_type==READ) begin
+    mem_if_drv.mem_drv.cs = 1;
+    mem_if_drv.mem_drv.we = 0;
+    mem_if_drv.mem_drv.re = 1;
+    mem_if_drv.mem_drv.addr = trans_drv.addr;
+
+    repeat (2) @(posedge mem_if_drv.clk)
+    trans_drv.rd_data = mem_if_drv.mem_drv.data_out;
+
+    mem_if_drv.mem_drv.cs = 0;
+    mem_if_drv.mem_drv.re = 0;
+  end
+end
+endtask
+
+endclass
+
+
+Interface
+
+interface mem_if #(awidth=`awidth, dwidth=`dwidth) (input bit clk, reset);
+
+logic [awidth-1:0] addr;
+logic [dwidth-1:0] data_in, data_out;
+logic cs, re, we;
+
+modport mem_drv (input data_out, output addr, data_in, cs, re, we);
+modport mem_mon (input data_out, addr, data_in, cs, re, we);
+
+property bus_check;
+  @(negedge clk) disable iff (reset || !cs)
+  (cs && we && !re) || (cs && !we && re);
+endproperty
+
+property rd_check;
+  @(negedge clk) disable iff (reset || !cs)
+  (cs && !we && re) |=> $stable(addr);
+endproperty
+
+assert property (bus_check);
+assert property (rd_check);
+
+endinterface
+
+
+Transaction+globals
+
+package globals;
+
+typedef enum {WRITE, READ} trans;
+
+`define awidth 16
+`define dwidth 32
+`define no_of_trans 100
+
+class transaction #(addr_width=`awidth, data_width=`dwidth);
+
+rand bit [addr_width-1:0] addr;
+rand bit [data_width-1:0] wr_data;
+bit [data_width-1:0] rd_data;
+rand trans trans_type;
+
+constraint addr_constr {addr[1:0] == 0;}
+
+endclass
+
+endpackage
+
+
+
+
+
