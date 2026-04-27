@@ -1,0 +1,12 @@
+ncverilog -access +rwc -gui -coverage all tb.sv
+
+ncverilog -sv -access +rwc -gui -coverage all -MESS tb.sv
+
+ncverilog -sv -access +rwc -gui -coverage all -mess tb.sv
+
+ncverilog -sv -access +rwc -gui tb.sv
+
+ncverilog -sv tb.sv
+
+ncverilog -access +rwc -mess tb.sv
+
